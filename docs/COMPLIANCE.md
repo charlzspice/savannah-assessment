@@ -1,113 +1,80 @@
-# Section 4 - AI Reflection
+# Compliance and privacy notes (Kenya)
 
-## 1. What did I use AI for across the four sections?
-I used AI as a development and reasoning assistant throughout the project, but I did not treat its output as automatically correct. I reviewed, tested, and made the final decisions on the design, implementation, security, privacy, and deployment.
+> **Status:** engineering design notes, written from a privacy-by-design perspective. **Not legal advice.**
+> Statute section numbers are cited from memory and the 2024/2025 Digital Health regulations were still evolving - the clinic's DPO/counsel must confirm which provisions apply before real patient data is processed.
 
-### Section 1 – Design
+## 1. Instruments considered
 
-I used an AI assistant to help me reason about the solution from several perspectives, including solution architecture, data protection, software engineering, DevOps, and cybersecurity. I also used it to research and interpret the relevant Kenyan legal and regulatory requirements, including the Data Protection Act 2019, the Digital Health Act 2023, and relevant regulations.
+| Instrument | Why it matters here |
+|---|---|
+| **Data Protection Act, 2019** (Cap. 411C) + **General Regulations 2021** + **Registration Regulations 2021** | Health data is *sensitive personal data*. Principles, lawful basis/consent, data-subject rights, DPIA, breach notification, cross-border transfer limits, controller/processor **registration with the ODPC**. |
+| **Digital Health Act, 2023** + **Digital Health (Health Information Management Procedures) Regulations, 2025** | Sector law for digital health solutions: health data controllers/processors, health data privacy/sharing/archiving, certification of digital health solutions, national/county health data banks. |
+| **Health Act, 2017** | Confidentiality of health records. |
+| **Constitution, Art. 31** | Right to privacy. |
+| **Computer Misuse and Cybercrimes Act, 2018** | Offences around unauthorised access - informs access control and logging. |
 
-AI helped propose the overall model, including the approach of deriving available appointment slots rather than permanently storing unnecessary slot records. It also highlighted privacy and security considerations that needed to be addressed in the design.
+## 2. Roles
 
-However, I remained responsible for reviewing these recommendations, deciding which ones were appropriate for the project, and approving the final architecture before implementation began. Legal and compliance-related suggestions were treated as areas requiring human verification rather than being accepted solely because AI suggested them.
+- **Controller:** the clinic (decides purposes/means). **Processor(s):** the hosting provider (Render), the MySQL database provider, and any SMS/email vendor - each needs a written processing agreement.
+- A **Data Protection Officer** should be designated and the clinic **registered with the ODPC** (health is a mandatory-registration category - confirm). The Digital Health Act regime may add its own registration/certification steps.
 
-### Section 2 – API
+## 3. Data inventory (what the system holds, and why)
 
-I used AI to assist with implementing the Django/Django REST Framework API, including models, serializers, views, migrations, seed data, and the automated test suite.
+| Data | Purpose | Sensitive? | Notes |
+|---|---|---|---|
+| Patient name, phone, email | Identify the patient, confirm/cancel/reschedule | Personal (and *health-linked* in context) | Phone required for staff-created patients; email optional |
+| Guardian name/phone (optional) | Minors' bookings (children's data has extra protection) | Personal | Only when relevant |
+| Appointment (doctor, time, status) | Deliver the booking service | **Health-linked → treated as sensitive** | |
+| Cancellation reason (≤200 chars) | Required by the product spec; operational | **Potentially sensitive** (free text) | Not logged, not in audit trail; UI should offer preset reasons |
+| Consent timestamp + privacy-notice version | Evidence of consent | Personal | |
+| Audit log (actor id, action, object ids) | Accountability, breach investigation | Pseudonymous | No names or free text |
+| **Deliberately NOT collected** | national ID, diagnosis, symptoms, "reason for visit", insurance numbers, photos | | Data minimisation |
 
-AI generated a significant amount of the initial implementation, including the 65 tests. I then reviewed the implementation, ran the application and tests, investigated failures, and made or requested corrections where necessary.
+## 4. Principles → implementation
 
-Human review was particularly important for authentication, authorization, object-level access control, data validation, privacy, and database constraints because these areas directly affect the security and correctness of the system.
+| Principle | How it is met |
+|---|---|
+| Lawfulness, fairness, transparency | Registration requires explicit `consent: true`; consent time and notice version stored. A privacy notice must be published (not included in this repo). |
+| Purpose limitation | Data used only to run bookings; no analytics/marketing fields. |
+| Data minimisation | See inventory; no clinical data; free-text limited and kept out of logs. |
+| Accuracy | Patients can re-register/contact staff; a staff *rectification* endpoint is listed as a gap (§8). |
+| Storage limitation | `anonymise_patient` command; retention period to be set by the clinic (clinical-record retention rules differ from booking-metadata rules). |
+| Integrity & confidentiality | TLS + HSTS, JWT with short expiry, object-level authorisation, UUID identifiers, throttling, no admin UI, non-root container, dependency/image/SAST scanning in CI, DB encryption at rest by the managed provider. |
+| Accountability | Immutable audit log of booking changes, patient exports and views; this document; DPIA summary below. |
+| Data protection by design/default | Secure defaults (DEBUG off, app won't boot without a secret key), public endpoint exposes no PII, 404-not-403 on foreign objects. |
 
-### Section 3 – Continuous Delivery
+## 5. Data-subject rights
 
-I used AI to draft the Dockerfile, `render.yaml`, and GitHub Actions workflow.
+| Right | Support |
+|---|---|
+| Access / portability | `GET /patients/{id}/export` (patient themself or staff) - JSON of everything held; the access is itself audited. |
+| Erasure | `manage.py anonymise_patient <id>`: removes identity and login, cancels future bookings, **keeps** the anonymised appointment history (may need to be retained). |
+| Rectification | Gap - currently via re-registration/staff process (see §8). |
+| Objection / restriction | Manual process via the DPO (see §8). |
+| Automated decisions | None. |
 
-I reviewed the deployment configuration and was responsible for decisions such as the hosting approach, environment configuration, secrets, deployment flow, and what data could safely be used in the deployed environment.
+## 6. Breach response (runbook outline)
 
-Because deployment configuration can affect the security and availability of the application, I did not rely solely on AI-generated configuration. It required human review and verification before being used.
+1. **Detect & contain** - revoke tokens (rotate `DJANGO_SECRET_KEY`), disable affected accounts, snapshot logs.
+2. **Assess** - use the audit log to establish *which* patients/records were exposed and whether data was readable.
+3. **Notify the ODPC within 72 hours** of becoming aware (where risk to rights and freedoms exists); **notify affected data subjects** without undue delay when risk is high. Where applicable, notify the Digital Health Agency per the Digital Health regulations.
+4. **Record** the incident, decisions and remediation; review controls.
 
-### Documentation
+## 7. Hosting and cross-border transfer
 
-I also used AI to help draft the README, technical documentation, and compliance notes. I reviewed these documents to ensure that they accurately described what was actually implemented rather than what the AI assumed had been implemented.
+- The 2021 General Regulations contain **data-localisation expectations for certain processing, including health-related processing** (e.g. a server/data centre or at least a serving copy in Kenya) and the DPA restricts transfers abroad to specified conditions. **Confirm exact scope with counsel.**
+- **This repository's deployment (Render, Frankfurt; MySQL hosted separately - confirm its region too) is for assessment only and must contain synthetic data only.** For production: host in Kenya or provide a compliant Kenyan serving copy, sign processing agreements, document the transfer basis, and keep backups in the same jurisdiction.
 
-### What I did myself
+## 8. DPIA summary and open items before real patient data
 
-My role was not simply to accept AI-generated output. I reviewed the proposed architecture, made product and scope decisions, ran the code and test suite, investigated errors, checked security implications, reviewed the database design, configured the deployment environment, and decided whether proposed changes should actually be included.
-
-Where AI-generated output affected privacy, security, authorization, compliance, or deployment, human review and testing were particularly important before accepting it.
-
----
-
-## 2. One example where an AI suggestion improved my work
-
-One useful example was when I asked the AI to review the system from multiple perspectives, including those of a solution architect, data-protection officer, senior engineer, DevOps engineer, and cybersecurity reviewer.
-
-The purpose was not simply to generate code. I wanted the design to be challenged before implementation.
-
-This review identified several issues that I had not explicitly specified in my original design.
-
-First, it pointed out that a free-text cancellation reason could potentially contain health information. This meant that the field needed to be treated as sensitive information and should not unnecessarily appear in application logs or audit records.
-
-Second, the review identified a potential IDOR vulnerability in the additional patient endpoint. An authenticated user should not automatically be able to access another patient's information simply by changing an ID in the request. This led to the use of UUIDs and object-level authorization, with unauthorized or nonexistent objects returning a 404 response.
-
-Third, the review highlighted the importance of rejecting naive datetimes rather than silently interpreting them according to the server's timezone. This reduced ambiguity in appointment scheduling.
-
-Finally, it highlighted that the appointment-booking guarantee should not depend only on application-level checks. The database should enforce the relevant uniqueness constraint so that concurrent requests cannot bypass the guarantee.
-
-The important part was that AI identified these risks, but I still had to evaluate whether they applied to my system, implement the changes, and test them. The improvement therefore came from using AI as an additional reviewer while retaining human responsibility for the final decisions.
-
----
-
-## 3. One example where AI output was wrong or incomplete, and how it was caught
-
-A good example was the concurrency test and the mutation check that I used to verify that the database constraint was actually responsible for preventing duplicate bookings.
-
-The purpose of the mutation check was to temporarily remove the database constraint and confirm that the concurrency test would then fail. If removing the constraint made no difference, the test could be passing for the wrong reason.
-
-The first mutation attempt reported that the tests still passed. At first this could have been interpreted as evidence that the test was not meaningful. However, I did not accept the result immediately.
-
-I checked the mutation script and found that it had modified the wrong part of the migration. The constraint was declared inside the `CreateModel` options rather than as a separate `AddConstraint` operation. Therefore, the script had not actually removed the constraint.
-
-I verified this by checking the constraint name with `grep -c`, which still returned `1`. After correcting the mutation script, the database constraint was actually removed. The resulting mutant then caused the expected test failures, demonstrating that the concurrency test was genuinely dependent on the database constraint.
-
-This was an important lesson because it showed that passing automated tests is not by itself proof that the tests are testing the intended behaviour. Human inspection of the test methodology was necessary.
-
-There were also several smaller issues that were identified by actually running the implementation:
-
-- A shell brace-expansion mistake created malformed directories.
-- The test settings initially failed to import because the production settings correctly refused to start without a secret key.
-- The OpenAPI schema generator identified four views that did not have serializers configured.
-- These issues required investigation and correction rather than simply accepting the AI-generated implementation.
-
-There were also areas that I had not fully verified at the time of writing. In particular, the Docker image had not been built in the authoring environment because Docker was unavailable there. The Render deployment configuration also contained assumptions about the deployment hook's `ref` parameter and the `RENDER_GIT_COMMIT` variable based on my understanding of Render's documentation. These should be verified during the first real deployment rather than presented as independently verified facts.
-
-This experience reinforced that AI-generated code and configuration must be executed, tested, and reviewed. A plausible-looking answer from an AI is not evidence that the implementation is correct.
-
----
-
-## 4. Two decisions I made without AI, and why I trusted my judgment
-
-### 1. I decided that the deployed environment should use synthetic data rather than real patient data.
-
-I made this decision because the system deals with information that could potentially include sensitive health and personal information. Using real patient information was unnecessary for demonstrating the functionality of the application and would introduce additional privacy and security risks.
-
-I trusted my judgment on this because the project could be fully demonstrated using synthetic data, while using real health information would create risks that were not necessary to achieve the project's objectives. This was therefore both a product-scope decision and a data-protection decision.
-
-AI helped me identify and reason about privacy risks, but the final decision to keep the deployed demonstration environment limited to synthetic data was mine.
-
-### 2. I decided to use Render as the hosting platform and to keep the deployment scope manageable.
-
-I chose Render because it provided a practical way to deploy the application without spending a disproportionate amount of the project time managing infrastructure. It also allowed the application to be deployed using configuration and CI/CD rather than requiring a manually maintained server.
-
-I trusted this decision because the project's objective was to demonstrate a functioning API, testing, containerization, and continuous delivery rather than to build a complex production infrastructure platform. Given the available time and project scope, I considered a managed hosting platform a reasonable trade-off.
-
-AI helped me compare and configure deployment approaches, but the decision about which platform to use and what level of infrastructure was appropriate for the project was ultimately mine.
-
-## Overall Reflection
-
-The main lesson from using AI in this project was that it is most useful as an accelerator and an additional reviewer rather than as a replacement for engineering judgment.
-
-AI was particularly useful for generating implementation code, identifying possible security and privacy issues, producing tests, and preparing deployment and documentation drafts. However, human intervention was essential when deciding whether a recommendation was appropriate, interpreting legal and privacy requirements, validating security controls, testing the actual implementation, investigating unexpected results, selecting the deployment strategy, and deciding what data could safely be used.
-
-The final responsibility for the system therefore remained with me. I treated AI-generated output as a proposal that had to be reviewed, tested, and, where necessary, corrected before it became part of the project.
+| Risk | Mitigation in place | Remaining action |
+|---|---|---|
+| Unauthorised access to appointment data | AuthN/Z, UUIDs, 404-on-foreign, throttling | **MFA for staff accounts**; periodic access review |
+| Enumeration / scraping of availability | Public endpoint returns free slots only, throttled, 90-day horizon | WAF / bot protection |
+| Sensitive free text in cancellation reason | Length limit, excluded from logs/audit | Preset reasons in UI; staff training |
+| Data at rest | Provider disk encryption | Field-level encryption for contact data if the threat model requires; encrypted, restore-tested backups |
+| Logs leaking PII | Bodies never logged; audit stores ids only | Central log retention policy; PII-scrubbing in error tracker |
+| Cross-border hosting | Synthetic-only demo | **Kenyan hosting/serving copy** (§7) |
+| No rectification/restriction tooling | Documented manual process | Add staff rectification + "restrict processing" flag |
+| Regulatory registration | - | ODPC registration, DPO appointment, privacy notice, Digital Health Act registration/certification as applicable, processor agreements |
+| Pen-test / hardening | CI SAST + dependency + image scans | Independent penetration test before go-live |
