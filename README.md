@@ -218,7 +218,7 @@ ruff check . && ruff format --check . && bandit -q -r apps config -x "*/tests/*"
 
 ### Demo accounts
 
-`seed_demo` creates 5 fictional doctors and two logins - `reception@demo.clinic.test` (staff) and `patient@demo.clinic.test` (patient). Passwords come from `DEMO_STAFF_PASSWORD` / `DEMO_PATIENT_PASSWORD` (or are generated and printed once), so **no credentials live in this repository**. Use `/auth/token` with `{"username": "<email>", "password": "..."}`.
+`seed_demo` creates 5 fictional doctors and two logins - `reception@demo.clinic.test` (staff1234) and `patient@demo.clinic.test` (patient1234). Passwords come from `DEMO_STAFF_PASSWORD` / `DEMO_PATIENT_PASSWORD` (or are generated and printed once), so **no credentials live in this repository**. Use `/auth/token` with `{"username": "<email>", "password": "..."}`.
 
 ### Operations
 
