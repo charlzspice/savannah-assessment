@@ -2,7 +2,7 @@ import uuid
 
 from django.conf import settings
 from django.db import models
-from django.db.models import Case, F, Q, Value, When
+from django.db.models import F, Q
 
 
 class AppointmentQuerySet(models.QuerySet):
@@ -45,19 +45,6 @@ class Appointment(models.Model):
         settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
     )
     reschedule_count = models.PositiveSmallIntegerField(default=0)
-    # 1 while the appointment is booked, NULL once cancelled. Maintained by the DATABASE (stored
-    # generated column), so it can never drift from `status` - not even via QuerySet.update().
-    # It exists because MySQL has no partial unique indexes: unique indexes treat NULLs as
-    # distinct, so including this column makes the constraints below apply to booked rows only.
-    holds_slot = models.GeneratedField(
-        expression=Case(
-            When(status="booked", then=Value(1)),
-            default=Value(None),
-            output_field=models.PositiveSmallIntegerField(null=True),
-        ),
-        output_field=models.PositiveSmallIntegerField(null=True),
-        db_persist=True,
-    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -67,15 +54,15 @@ class Appointment(models.Model):
         ordering = ["start_time"]
         constraints = [
             # THE double-booking guarantee lives in the database, not in application code.
-            # Cancelled rows have holds_slot=NULL, and NULLs never collide in a unique index, so
-            # cancelling frees the slot for free. Works identically on MySQL, PostgreSQL, SQLite
-            # (MySQL cannot do `UniqueConstraint(condition=...)`; Django would silently skip it).
+            # Partial: cancelled rows don't hold the slot, so cancelling frees it for free.
             models.UniqueConstraint(
-                fields=["doctor", "start_time", "holds_slot"],
+                fields=["doctor", "start_time"],
+                condition=Q(status="booked"),
                 name="uniq_booked_slot_per_doctor",
             ),
             models.UniqueConstraint(
-                fields=["patient", "start_time", "holds_slot"],
+                fields=["patient", "start_time"],
+                condition=Q(status="booked"),
                 name="uniq_booked_slot_per_patient",
             ),
             models.CheckConstraint(

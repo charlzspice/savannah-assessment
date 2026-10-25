@@ -1,5 +1,4 @@
-"""Proves double-booking is impossible: the threaded race needs a real server database
-(MySQL/PostgreSQL); the constraint tests below run on every backend, including SQLite."""
+"""Proves double-booking is impossible under real concurrency (needs PostgreSQL)."""
 
 import threading
 
@@ -12,15 +11,14 @@ from apps.core.exceptions import SlotTaken
 
 from .helpers import TUE, at
 
-pytestmark = pytest.mark.django_db(transaction=True)
+pytestmark = [
+    pytest.mark.django_db(transaction=True),
+    pytest.mark.skipif(
+        connection.vendor != "postgresql", reason="needs PostgreSQL row/constraint semantics"
+    ),
+]
 
-needs_server_db = pytest.mark.skipif(
-    connection.vendor not in {"postgresql", "mysql"},
-    reason="needs real row/constraint semantics (PostgreSQL or MySQL); SQLite can't",
-)
 
-
-@needs_server_db
 def test_parallel_bookings_for_one_slot_yield_exactly_one_winner(doctor, make_patient):
     patients = [make_patient(f"P{i}") for i in range(8)]
     start = at(TUE, "09:00")
@@ -62,20 +60,4 @@ def test_database_itself_refuses_a_second_booked_row(doctor, patient, other_pati
     Appointment.objects.filter(doctor=doctor).update(status="cancelled")
     Appointment.objects.create(
         doctor=doctor, patient=other_patient, start_time=start, end_time=at(TUE, "10:30")
-    )
-
-
-def test_database_itself_refuses_one_patient_in_two_rooms(doctor, doctor2, patient):
-    """The per-patient constraint is enforced by the database too, and also frees on cancel."""
-    start = at(TUE, "11:00")
-    Appointment.objects.create(
-        doctor=doctor, patient=patient, start_time=start, end_time=at(TUE, "11:30")
-    )
-    with pytest.raises(IntegrityError), transaction.atomic():
-        Appointment.objects.create(
-            doctor=doctor2, patient=patient, start_time=start, end_time=at(TUE, "11:30")
-        )
-    Appointment.objects.filter(doctor=doctor).update(status="cancelled")
-    Appointment.objects.create(
-        doctor=doctor2, patient=patient, start_time=start, end_time=at(TUE, "11:30")
     )

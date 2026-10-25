@@ -1,6 +1,6 @@
 # Clinic Booking API
 
-A REST API for a small clinic (5 doctors, 30-minute slots) built with **Django + Django REST Framework + MySQL 8.4**, deployed on **Render** through **GitHub Actions**.
+A REST API for a small clinic (5 doctors, 30-minute slots) built with **Django + Django REST Framework + PostgreSQL**, deployed on **Render** through **GitHub Actions**.
 
 > **Live URL:** `https://<your-service>.onrender.com` &nbsp;·&nbsp; **Interactive docs:** `/docs/` &nbsp;·&nbsp; **Health:** `/health`
 > *(replace after the first deploy; the free tier sleeps when idle, so the first request can take ~30-60 s)*
@@ -53,9 +53,9 @@ erDiagram
 
 **D1 - Slots are *derived*, not stored.** Availability = (doctor's working blocks → 30-min grid) − (booked appointments). *Alternative:* pre-generate a `Slot` table per doctor per day. That makes "which slots are free" a simple query but needs a generator job, goes stale when schedules change, and creates rows nobody uses. At 5 doctors the computed approach is cheaper, always correct, and trivially cacheable later.
 
-**D2 - The database guarantees no double booking.** A *unique constraint* on `(doctor, start_time, holds_slot)` is the source of truth, where `holds_slot` is a database-generated column that is `1` while an appointment is `booked` and `NULL` once cancelled. Unique indexes never treat `NULL`s as equal, so the constraint applies to booked rows only. (This is the portable form of a partial index `WHERE status = 'booked'`: MySQL has no partial indexes, and Django silently skips `UniqueConstraint(condition=…)` there - it only emits warning `models.W036`.) The service does a friendly pre-check (to give a clear message) and then translates the constraint's `IntegrityError` into `409`. *Alternatives:* (a) check-then-insert in code - has a race window; (b) `SELECT … FOR UPDATE` on the doctor row - correct but serialises all of a doctor's bookings and still wants the constraint as a backstop; (c) `SERIALIZABLE` isolation - correct but needs retry plumbing. The constraint is the simplest thing that is correct under any concurrency, and it protects against future code paths (admin scripts, imports) that bypass the service. **Verified, not assumed:** the concurrency test fires 8 simultaneous bookings at one slot and asserts exactly one wins; I confirmed the test is meaningful by running it on MySQL *before* the generated-column fix (Django silently skips the partial constraint there): all 8 bookings "succeeded" and the test failed; after the fix exactly one wins, repeatably (also stress-checked at 30 simultaneous requests, and for the second constraint - one patient racing to book ten doctors at the same instant).
+**D2 - The database guarantees no double booking.** A *partial unique constraint* on `(doctor, start_time) WHERE status = 'booked'` is the source of truth. The service does a friendly pre-check (to give a clear message) and then translates the constraint's `IntegrityError` into `409`. *Alternatives:* (a) check-then-insert in code - has a race window; (b) `SELECT … FOR UPDATE` on the doctor row - correct but serialises all of a doctor's bookings and still wants the constraint as a backstop; (c) `SERIALIZABLE` isolation - correct but needs retry plumbing. The constraint is the simplest thing that is correct under any concurrency, and it protects against future code paths (admin scripts, imports) that bypass the service. **Verified, not assumed:** the concurrency test fires 8 simultaneous bookings at one slot and asserts exactly one wins; I confirmed the test is meaningful by temporarily removing the constraint and the pre-check, after which all 8 "succeeded" and the test failed.
 
-**D3 - Cancelling is a soft state change.** Cancelled rows are kept (audit, reporting, dispute resolution). Because `holds_slot` is `NULL` for cancelled rows, cancelling frees the slot with *no extra code* - a cancelled row simply stops holding the slot. The column is computed by the database itself, so this also holds for bulk `UPDATE`s and any code path that bypasses the service. A patient may therefore have several cancelled rows for the same time, which is intended.
+**D3 - Cancelling is a soft state change.** Cancelled rows are kept (audit, reporting, dispute resolution). Because the unique constraint only covers `booked` rows, cancelling frees the slot with *no extra code* - a cancelled row simply stops holding the slot. A patient may therefore have several cancelled rows for the same time, which is intended.
 
 **D4 - Reschedule is an in-place atomic update**, not cancel+create. It keeps one appointment identity (links, reminders and history stay attached), runs in one transaction, applies *exactly the same validator as a fresh booking* (one function, so the paths cannot drift), and writes `from/to` times to the audit log. The old slot is freed in the same statement that claims the new one.
 
@@ -67,7 +67,7 @@ erDiagram
 
 **D8 - Django admin is not installed.** It would be a second, broader PII-exposing surface. Staff act through the audited API.
 
-**D9 - MySQL 8.4 over SQLite.** The unique-constraint guarantee and the real concurrency test need a real database. (SQLite works as a zero-config dev fallback; the concurrency test skips there.) Django 6.1 requires **MySQL 8.4+** and refuses to start on older servers. Driver: `mysqlclient` (needs the MySQL/MariaDB client library; the Dockerfile builds it in a separate stage). One behaviour to be aware of: MySQL's default collation is case-insensitive, so usernames/e-mails that differ only by case (`A@x.test` / `a@x.test`) are the *same* login.
+**D9 - PostgreSQL over SQLite.** The partial-unique-constraint guarantee and the real concurrency test need a real database. (SQLite works as a zero-config dev fallback; the concurrency test skips there.)
 
 **D10 - Modular monolith.** One deployable, clear internal boundaries. Microservices would add operational cost with no benefit for "5 doctors, starting small". The boundaries (`clinic` / `accounts` / `appointments` / `audit`) are where I'd cut first if needed.
 
@@ -131,52 +131,50 @@ JWT with short expiry · object-level authorisation (404 on foreign ids) · UUID
 
 ### Tests
 
-`pytest` - 66 tests, ~94% coverage: validation rules and boundaries (exactly-1-hour lead, last slot, off-grid, lunch break, weekend, >90 days), conflict handling, cancel/reschedule state machine, access control (cross-patient 404s), privacy (no PII/free-text in audit log or availability), registration/consent, anonymisation, export, end-to-end JWT flow, and the **real-MySQL concurrency test**. Time is pinned via an injectable clock, so boundary tests are deterministic.
+`pytest` - 65 tests, ~94% coverage: validation rules and boundaries (exactly-1-hour lead, last slot, off-grid, lunch break, weekend, >90 days), conflict handling, cancel/reschedule state machine, access control (cross-patient 404s), privacy (no PII/free-text in audit log or availability), registration/consent, anonymisation, export, end-to-end JWT flow, and the **real-Postgres concurrency test**. Time is pinned via an injectable clock, so boundary tests are deterministic.
 
 ---
 
 ## 3. Deployment & CI/CD
 
 - **Public URL:** `https://<your-service>.onrender.com`
-- **Provider:** Render (Docker web service), defined in [`render.yaml`](render.yaml). **Render has no managed MySQL** (its managed database is PostgreSQL only), so the MySQL 8.4+ database is provisioned separately and supplied through `DATABASE_URL`; use `?ssl_mode=REQUIRED` for any database reached over a network, because the data is personal health information.
+- **Provider:** Render (Docker web service + managed PostgreSQL), defined in [`render.yaml`](render.yaml).
 - **Branch that deploys:** **`main`**. Render's own auto-deploy is **off**; only the pipeline can deploy, so **nothing reaches production without passing the checks**.
 
 ### Pipeline ([`.github/workflows/ci-cd.yml`](.github/workflows/ci-cd.yml))
 
 | Trigger | Jobs |
 |---|---|
-| **Every pull request** | `lint-and-security` (ruff, bandit, pip-audit) · `test` (MySQL 8.4 service container; migration-drift check; pytest incl. concurrency test; ≥85% coverage gate) · `image` (docker build + Trivy HIGH/CRITICAL scan) |
+| **Every pull request** | `lint-and-security` (ruff, bandit, pip-audit) · `test` (Postgres service container; migration-drift check; pytest incl. concurrency test; ≥85% coverage gate) · `image` (docker build + Trivy HIGH/CRITICAL scan) |
 | **Merge to `main`** | the same three jobs, then `deploy`: calls Render's deploy hook for *that exact commit SHA*, then polls `/health` until it reports the same SHA (smoke test). Fails the run if the new version is not live in 15 min. |
 
 **One-time setup**
 
-1. Push the repo to GitHub. Provision a MySQL 8.4+ database (same region as the service, i.e. Frankfurt). In Render: *New → Blueprint →* select the repo (creates the service). Set `DATABASE_URL` (`mysql://USER:PASSWORD@HOST:3306/clinic?ssl_mode=REQUIRED`), `DEMO_STAFF_PASSWORD` and `DEMO_PATIENT_PASSWORD` in the dashboard.
+1. Push the repo to GitHub. In Render: *New → Blueprint →* select the repo (creates the DB + service). Set `DEMO_STAFF_PASSWORD` and `DEMO_PATIENT_PASSWORD` in the dashboard.
 2. Render → service → *Settings → Deploy Hook*: copy the URL into a GitHub **secret** `RENDER_DEPLOY_HOOK_URL`; add a repo **variable** `APP_URL` (e.g. `https://clinic-booking-api.onrender.com`). Create a GitHub *Environment* named `production` (optionally with required reviewers).
 3. GitHub → *Settings → Branches*: protect `main` - require a PR and the three status checks; no direct pushes.
 
 **Rollback:** redeploy the previous commit from the Render dashboard (or `git revert` + merge). Migrations here are additive; destructive migrations should follow expand/contract.
 
-**Operational notes / known limits:** migrations run on container start (fine for one instance; use a release job when scaling out) · rate-limit counters are per-process (move to Redis when scaling) · Render free tier sleeps when idle · database plan/backup limits depend on whichever MySQL provider you choose.
+**Operational notes / known limits:** migrations run on container start (fine for one instance; use a release job when scaling out) · rate-limit counters are per-process (move to Redis when scaling) · Render free tier sleeps when idle and its free Postgres expires after ~30 days.
 
 ---
 
 ## Running locally
 
 ```bash
-# Option A - Docker (API + MySQL 8.4, demo data seeded)
+# Option A - Docker (API + Postgres, demo data seeded)
 docker compose up --build            # http://localhost:8000/docs/
 
 # Option B - Python
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
 cp .env.example .env                 # then export the variables (or use direnv)
-# needs MySQL 8.4+ running (e.g. `docker compose up db`) plus the client library:
-# macOS `brew install mysql-client pkg-config`; Debian/Ubuntu `apt install default-libmysqlclient-dev build-essential pkg-config`
-export DJANGO_DEBUG=true DATABASE_URL=mysql://clinic:clinic@127.0.0.1:3306/clinic
+export DJANGO_DEBUG=true DATABASE_URL=postgres://clinic:clinic@localhost:5432/clinic
 python manage.py migrate && python manage.py seed_demo
 python manage.py runserver
 
-pytest                                # needs MySQL (or PostgreSQL) for the concurrency tests (skipped on SQLite)
+pytest                                # needs PostgreSQL for the concurrency test (skips on SQLite)
 ruff check . && ruff format --check . && bandit -q -r apps config -x "*/tests/*"
 ```
 
