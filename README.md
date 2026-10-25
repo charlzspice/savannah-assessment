@@ -137,7 +137,7 @@ JWT with short expiry · object-level authorisation (404 on foreign ids) · UUID
 
 ## 3. Deployment & CI/CD
 
-- **Public URL:** `https://<your-service>.onrender.com`
+- **Public URL:** `https://clinic-booking-api-b84r.onrender.com`
 - **Provider:** Render (Docker web service + managed PostgreSQL), defined in [`render.yaml`](render.yaml).
 - **Branch that deploys:** **`main`**. Render's own auto-deploy is **off**; only the pipeline can deploy, so **nothing reaches production without passing the checks**.
 
