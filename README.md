@@ -2,7 +2,7 @@
 
 A REST API for a small clinic (5 doctors, 30-minute slots) built with **Django + Django REST Framework + PostgreSQL**, deployed on **Render** through **GitHub Actions**.
 
-> **Live URL:** `https://<your-service>.onrender.com` &nbsp;·&nbsp; **Interactive docs:** `/docs/` &nbsp;·&nbsp; **Health:** `/health`
+> **Live URL:** `https://clinic-booking-api-b84r.onrender.com` &nbsp;·&nbsp; **Interactive docs:** `/docs/` &nbsp;·&nbsp; **Health:** `/health`
 > *(replace after the first deploy; the free tier sleeps when idle, so the first request can take ~30-60 s)*
 >
 > **Demo data is synthetic.** Reviewer credentials are shared privately (see [Demo accounts](#demo-accounts)).
