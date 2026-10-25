@@ -110,4 +110,4 @@ The main lesson from using AI in this project was that it is most useful as an a
 
 AI was particularly useful for generating implementation code, identifying possible security and privacy issues, producing tests, and preparing deployment and documentation drafts. However, human intervention was essential when deciding whether a recommendation was appropriate, interpreting legal and privacy requirements, validating security controls, testing the actual implementation, investigating unexpected results, selecting the deployment strategy, and deciding what data could safely be used.
 
-The final responsibility for the system therefore remained with me. I treated AI-generated output as a proposal that had to be reviewed, tested, and, where necessary, corrected before it became part of the project.
+The final responsibility for the system therefore remained with me. I treated AI-generated output as a proposal that had to be reviewed, tested, and, where necessary, corrected before it became part of the project. .
