@@ -1,7 +1,6 @@
 # Section 4 - AI Reflection
 
 ## 1. What did I use AI for across the four sections?
-
 I used AI as a development and reasoning assistant throughout the project, but I did not treat its output as automatically correct. I reviewed, tested, and made the final decisions on the design, implementation, security, privacy, and deployment.
 
 ### Section 1 – Design
