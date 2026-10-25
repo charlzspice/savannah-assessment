@@ -1,0 +1,94 @@
+name: CI/CD
+
+on:
+  pull_request:            # every PR: lint + security + tests + image scan
+  push:
+    branches: [main]       # merging a PR into main = a push to main -> deploy
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}   # never cancel a running deploy
+
+jobs:
+  lint-and-security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: System libraries for mysqlclient
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config default-libmysqlclient-dev build-essential
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12", cache: pip}
+      - run: pip install -r requirements-dev.txt
+      - name: Lint and format check
+        run: |
+          ruff check .
+          ruff format --check .
+      - name: Static security analysis (bandit)
+        run: bandit -q -r apps config -x "*/tests/*"
+      - name: Dependency vulnerability audit
+        run: pip-audit -r requirements.txt
+
+  test:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4            # Django 6.1 requires MySQL 8.4+
+        env:
+          MYSQL_ROOT_PASSWORD: clinic   # root: Django's test runner must create/drop test_clinic
+          MYSQL_DATABASE: clinic
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -pclinic --silent"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      DATABASE_URL: mysql://root:clinic@127.0.0.1:3306/clinic
+    steps:
+      - uses: actions/checkout@v4
+      - name: System libraries for mysqlclient
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config default-libmysqlclient-dev build-essential
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12", cache: pip}
+      - run: pip install -r requirements-dev.txt
+      - name: Fail if models changed without a migration
+        run: DJANGO_DEBUG=true python manage.py makemigrations --check --dry-run
+      - name: Tests (includes real-MySQL concurrency test)
+        run: pytest --cov=apps --cov-report=term-missing --cov-fail-under=85
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t clinic-booking:${{ github.sha }} .
+      - name: Scan image for HIGH/CRITICAL vulnerabilities
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: clinic-booking:${{ github.sha }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [lint-and-security, test, image]
+    runs-on: ubuntu-latest
+    environment: production        # add required reviewers here for a manual approval gate
+    steps:
+      - name: Trigger Render deploy of this exact commit
+        env:
+          HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: curl --fail --silent --show-error -X POST "${HOOK}&ref=${GITHUB_SHA}"
+      - name: Wait until the new commit is live (smoke test)
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+        run: |
+          for i in $(seq 1 60); do
+            live=$(curl -s --max-time 10 "$APP_URL/health" | jq -r '.commit // empty' || true)
+            echo "attempt $i: live commit = ${live:-<none>}"
+            if [ "$live" = "$GITHUB_SHA" ]; then echo "Deployed ${GITHUB_SHA}"; exit 0; fi
+            sleep 15
+          done
+          echo "::error::Deployment of $GITHUB_SHA did not become healthy in 15 minutes"; exit 1

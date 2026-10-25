@@ -1,0 +1,32 @@
+# Local development: API + MySQL 8.4.   docker compose up --build
+services:
+  db:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: root-local-only
+      MYSQL_DATABASE: clinic
+      MYSQL_USER: clinic
+      MYSQL_PASSWORD: clinic
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_0900_ai_ci"]
+    ports: ["3306:3306"]
+    volumes:
+      # lets the `clinic` user create Django's throwaway test_* databases (for running pytest)
+      - ./docker/mysql-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uclinic -pclinic --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  api:
+    build: .
+    depends_on:
+      db: {condition: service_healthy}
+    environment:
+      DJANGO_DEBUG: "true"
+      DJANGO_SECRET_KEY: local-dev-only
+      DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1
+      DATABASE_URL: mysql://clinic:clinic@db:3306/clinic
+      SEED_DEMO: "true"
+      DEMO_STAFF_PASSWORD: Staff-demo-Pass-123
+      DEMO_PATIENT_PASSWORD: Patient-demo-Pass-123
+    ports: ["8000:8000"]

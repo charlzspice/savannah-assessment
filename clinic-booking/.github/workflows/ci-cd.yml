@@ -1,0 +1,90 @@
+name: CI/CD
+
+on:
+  pull_request:            # every PR: lint + security + tests + image scan
+  push:
+    branches: [main]       # merging a PR into main = a push to main -> deploy
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}   # never cancel a running deploy
+
+jobs:
+  lint-and-security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12", cache: pip}
+      - run: pip install -r requirements-dev.txt
+      - name: Lint and format check
+        run: |
+          ruff check .
+          ruff format --check .
+      - name: Static security analysis (bandit)
+        run: bandit -q -r apps config -x "*/tests/*"
+      - name: Dependency vulnerability audit
+        run: pip-audit -r requirements.txt
+
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: clinic
+          POSTGRES_PASSWORD: clinic
+          POSTGRES_DB: clinic
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U clinic" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://clinic:clinic@localhost:5432/clinic
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12", cache: pip}
+      - run: pip install -r requirements-dev.txt
+      - name: Fail if models changed without a migration
+        run: DJANGO_DEBUG=true python manage.py makemigrations --check --dry-run
+      - name: Tests (includes real-Postgres concurrency test)
+        run: pytest --cov=apps --cov-report=term-missing --cov-fail-under=85
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t clinic-booking:${{ github.sha }} .
+      - name: Scan image for HIGH/CRITICAL vulnerabilities
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: clinic-booking:${{ github.sha }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [lint-and-security, test, image]
+    runs-on: ubuntu-latest
+    environment: production        # add required reviewers here for a manual approval gate
+    steps:
+      - name: Trigger Render deploy of this exact commit
+        env:
+          HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: curl --fail --silent --show-error -X POST "${HOOK}&ref=${GITHUB_SHA}"
+      - name: Wait until the new commit is live (smoke test)
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+        run: |
+          for i in $(seq 1 60); do
+            live=$(curl -s --max-time 10 "$APP_URL/health" | jq -r '.commit // empty' || true)
+            echo "attempt $i: live commit = ${live:-<none>}"
+            if [ "$live" = "$GITHUB_SHA" ]; then echo "Deployed ${GITHUB_SHA}"; exit 0; fi
+            sleep 15
+          done
+          echo "::error::Deployment of $GITHUB_SHA did not become healthy in 15 minutes"; exit 1

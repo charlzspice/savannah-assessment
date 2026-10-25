@@ -1,0 +1,30 @@
+# Render Blueprint: New > Blueprint > select this repo.
+# Region note: Render has no African region; Frankfurt is the nearest. See docs/COMPLIANCE.md
+# (data residency) - this deployment must only ever hold SYNTHETIC data.
+#
+# DATABASE: Render's managed database product is PostgreSQL only - there is no managed MySQL.
+# Provision MySQL 8.4+ elsewhere (any managed MySQL, or a MySQL Docker "private service" on
+# Render with a persistent disk) and paste its URL into DATABASE_URL in the dashboard, e.g.
+#   mysql://USER:PASSWORD@HOST:3306/clinic?ssl_mode=REQUIRED
+# Keep the DB in the same region as the web service (frankfurt) to avoid cross-region latency.
+
+services:
+  - type: web
+    name: clinic-booking-api
+    runtime: docker
+    region: frankfurt
+    plan: free            # free web services sleep when idle (first request is slow)
+    branch: main
+    autoDeploy: false     # deploys are triggered by GitHub Actions *after* tests pass
+    healthCheckPath: /health
+    envVars:
+      - key: DJANGO_SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        sync: false       # MySQL connection string; set in the Render dashboard (it has a password)
+      - key: SEED_DEMO
+        value: "true"
+      - key: DEMO_STAFF_PASSWORD
+        sync: false       # set in the Render dashboard; share with reviewers privately
+      - key: DEMO_PATIENT_PASSWORD
+        sync: false
