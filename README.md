@@ -24,7 +24,6 @@ A REST API for a small clinic (5 doctors, 30-minute slots) built with **Django +
 A record of *which patient booked which doctor, and when* reveals health information. Under Kenya's **Data Protection Act 2019** health data is *sensitive personal data*, and the **Digital Health Act 2023** (with its regulations) adds sector duties. So the design starts from privacy and security constraints, and the booking logic sits inside them. The full mapping is in [`docs/COMPLIANCE.md`](docs/COMPLIANCE.md); the design consequences are woven through the decisions below. *(I am an engineer, not a lawyer: legal points are design assumptions to be validated by counsel and the clinic's DPO.)*
 
 ### 1.2 Domain model
-
 ```mermaid
 erDiagram
     DOCTOR ||--o{ WORKING_SCHEDULE : "works"
@@ -32,11 +31,50 @@ erDiagram
     PATIENT ||--o{ APPOINTMENT : "books"
     USER   ||--o| PATIENT : "logs in as"
     USER   ||--o{ AUDIT_LOG : "acts"
-    DOCTOR { int id PK; string full_name; string specialty; int slot_minutes; bool is_active }
-    WORKING_SCHEDULE { int doctor_id FK; int weekday; time start_time; time end_time }
-    PATIENT { uuid id PK; string full_name; string phone; string email; string guardian_name; datetime consent_given_at; string consent_notice_version; datetime anonymised_at }
-    APPOINTMENT { uuid id PK; int doctor_id FK; uuid patient_id FK; datetime start_time; datetime end_time; string status; string cancel_reason_code; string cancel_note; int reschedule_count }
-    AUDIT_LOG { uuid id PK; datetime created_at; int actor_id FK; string action; string object_type; string object_id; json metadata }
+
+    DOCTOR {
+        int id PK
+        string full_name
+        string specialty
+        int slot_minutes
+        bool is_active
+    }
+    WORKING_SCHEDULE {
+        int doctor_id FK
+        int weekday
+        time start_time
+        time end_time
+    }
+    PATIENT {
+        uuid id PK
+        string full_name
+        string phone
+        string email
+        string guardian_name
+        datetime consent_given_at
+        string consent_notice_version
+        datetime anonymised_at
+    }
+    APPOINTMENT {
+        uuid id PK
+        int doctor_id FK
+        uuid patient_id FK
+        datetime start_time
+        datetime end_time
+        string status
+        string cancel_reason_code
+        string cancel_note
+        int reschedule_count
+    }
+    AUDIT_LOG {
+        uuid id PK
+        datetime created_at
+        int actor_id FK
+        string action
+        string object_type
+        string object_id
+        json metadata
+    }
 ```
 
 **Components** (Django apps, one responsibility each):
